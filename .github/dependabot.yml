@@ -1,0 +1,18 @@
+# Vigilancia de CVEs en dependencias (sin gastar minutos de Actions).
+# Solo actualizaciones de seguridad: open-pull-requests-limit 0 desactiva las
+# actualizaciones de versión normales. Cuando GitHub publica un aviso que
+# afecta a algún paquete, Dependabot abre un único PR agrupado por carpeta.
+# Requiere activar en Settings → Advanced Security: «Dependabot alerts» y
+# «Dependabot security updates».
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 0
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
