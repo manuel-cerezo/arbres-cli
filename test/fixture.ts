@@ -37,7 +37,7 @@ export function makeFixture(): string {
 
   write('meta.json', {
     format: 1, version: '2026-11-03', generated_at: '2026-11-03T13:20:47.042Z',
-    datasets: { viari: { count: 6, version: '2026-11-03' }, lh: { count: 3, version: '2026-11-03', municipi: 'lh' } },
+    datasets: { viari: { count: 8, version: '2026-11-03' }, lh: { count: 4, version: '2026-11-03', municipi: 'lh' } },
   });
 
   gz('trees-viari.json.gz', pack('viari', [
@@ -47,12 +47,16 @@ export function makeFixture(): string {
     { codi: 'A4', lat: 41.4000, lng: 2.1600, sp: 2, cat: 2, dist: 1, barri: 2, plant: '0013-04-22', adreca: 'G.V. Corts Catalanes, 491' },
     { codi: 'A5', lat: 41.4001, lng: 2.1601, sp: 3, cat: 2, dist: 1, barri: 2, plant: null, adreca: ' , 5' },
     { codi: 'A6', lat: 41.4002, lng: 2.1602, sp: 0, cat: 2, dist: 1, barri: 2, plant: '2009-02-01', adreca: null },
+    { codi: 'A7', lat: 41.3900, lng: 2.1500, sp: 4, cat: 0, dist: 0, barri: 1, plant: null, adreca: 'C\\ Aragó, 1' },
+    { codi: 'A8', lat: 41.3901, lng: 2.1501, sp: 5, cat: 0, dist: 0, barri: 1, plant: null, adreca: 'C\\ Aragó, 3' },
   ], {
     species: [
       { id: 1, ci: 'Platanus × acerifolia', es: 'Plátano', ca: 'Plàtan' },
       { id: 2, ci: 'Jacaranda mimosifolia', es: 'Jacaranda', ca: 'Xicranda' },
       { id: 3, ci: 'Pinus pinea', es: 'Pino piñonero', ca: 'Pi pinyer' },
       { id: 4, ci: 'Parkinsonia aculeata', es: 'Espino de Jerusalén', ca: 'Parkinsònia' },
+      { id: 5, ci: 'Acer sp.', es: '-', ca: '-' },
+      { id: 6, ci: 'Abies x masjoannis', es: 'Abeto de Masjoan', ca: 'Avet de Masjoan' },
     ],
     districts: [{ c: 2, n: 'EIXAMPLE' }, { c: 4, n: 'GRÀCIA' }],
     barris: [{ c: 6, n: 'LA SAGRADA FAMILIA' }, { c: 9, n: 'LA NOVA ESQUERRA DE LEIXAMPLE' }, { c: 31, n: 'LA VILA DE GRÀCIA' }],
@@ -63,11 +67,13 @@ export function makeFixture(): string {
     { codi: '420001', lat: 41.36, lng: 2.10, sp: 0, cat: -1, dist: 0, barri: 0, plant: '2026-10-29', adreca: null, prec: 0 },
     { codi: '420002', lat: 41.36, lng: 2.101, sp: 0, cat: -1, dist: 0, barri: 0, plant: '2005-12-31', adreca: null, prec: 1 },
     { codi: '420003', lat: 41.36, lng: 2.102, sp: 1, cat: -1, dist: 0, barri: 0, plant: '2015-12-31', adreca: null, prec: 2 },
+    { codi: '420004', lat: 41.361, lng: 2.103, sp: 2, cat: -1, dist: 0, barri: 0, plant: null, adreca: null },
   ], {
     municipi: 'lh',
     species: [
       { id: null, ci: 'Platanus hispanica', es: 'Plátano de sombra / Plátano', ca: 'Plàtan' },
       { id: null, ci: 'Tilia cordata', es: 'Tilo de hoja pequeña / Tilo', ca: 'Til·ler' },
+      { id: null, ci: 'Abies × masjoannis', es: 'Abeto', ca: 'Avet' },
     ],
     districts: [{ c: 1, n: null }],
     barris: [{ c: null, n: 'Centre' }],

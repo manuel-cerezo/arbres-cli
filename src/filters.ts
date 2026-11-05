@@ -52,12 +52,24 @@ function parseDate(value: string, end: boolean): string {
   throw new UsageError(`Fecha no válida «${value}». Usa AAAA, AAAA-MM o AAAA-MM-DD.`);
 }
 
+/** Zona con datos (Barcelona y L'Hospitalet), con margen. */
+const AREA_BOUNDS = { minLat: 41.2, maxLat: 41.6, minLng: 1.9, maxLng: 2.4 };
+
 export function parsePoint(value: string): { lat: number; lng: number } {
   const parts = value.split(/[,\s]+/).filter(Boolean).map(Number);
   if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) {
     throw new UsageError(`Coordenadas no válidas «${value}». Usa lat,lng, por ejemplo 41.403,2.174.`);
   }
-  return { lat: parts[0], lng: parts[1] };
+  const [lat, lng] = parts;
+  const inside = (a: number, b: number) => a >= AREA_BOUNDS.minLat && a <= AREA_BOUNDS.maxLat && b >= AREA_BOUNDS.minLng && b <= AREA_BOUNDS.maxLng;
+  if (!inside(lat, lng)) {
+    throw new UsageError(
+      inside(lng, lat)
+        ? `«${value}» parece estar al revés: el orden es latitud,longitud. Prueba con ${lng},${lat}.`
+        : `«${value}» está fuera de Barcelona y L'Hospitalet, que es donde hay datos.`,
+    );
+  }
+  return { lat, lng };
 }
 
 /** Distancia en metros (equirectangular: sobra para distancias de una ciudad). */
@@ -110,10 +122,17 @@ export function resolveArea(trees: Tree[], query: string, kind: 'barrio' | 'dist
   }
   const top = Math.max(0, ...[...seen.values()].map((v) => v.score));
   const hits = [...seen].filter(([, v]) => v.score === top && top > 0);
-  if (!hits.length) throw new UsageError(`No encuentro ningún ${kind} que se llame «${query}».`);
-  if (hits.length > 1 && top < 2) {
+  // «--barrio Eixample» o «--barrio Gràcia»: quizá quería el distrito.
+  const other = kind === 'barrio' ? known.find((a) => a.kind === 'distrito' && (!municipio || a.municipio === municipio) && matchScore(query, a.name) >= 2) : undefined;
+  const hint = other ? ` ${other.name} es un distrito: usa --distrito "${other.name}".` : '';
+  if (!hits.length) throw new UsageError(`No encuentro ningún ${kind} que se llame «${query}».${hint}`);
+  // Varios parecidos, o uno solo parecido cuando hay un distrito con ese nombre exacto: se pide precisar.
+  if ((hits.length > 1 || other) && top < 2) {
+    const names = hits.map(([, v]) => v.name).sort();
     throw new UsageError(
-      `«${query}» puede ser más de un ${kind}: ${hits.map(([, v]) => v.name).sort().join(', ')}. Escribe el nombre completo.`,
+      names.length > 1
+        ? `«${query}» puede ser más de un ${kind}: ${names.join(', ')}. Escribe el nombre completo.${hint}`
+        : `«${query}» no es el nombre de un ${kind}; el más parecido es ${names[0]}.${hint}`,
     );
   }
   const [code, v] = hits[0];
@@ -162,10 +181,10 @@ export function buildFilter(trees: Tree[], input: FilterInput, known: AreaRef[] 
     tests.push((t) => {
       const p = t.plantacion;
       if (!p || p.dudosa) return false;
-      // Con solo el año, se compara el año.
-      const lo = p.precision === 'año' ? `${p.fecha}-12-31` : p.fecha;
-      const hi = p.precision === 'año' ? `${p.fecha}-01-01` : p.fecha;
-      return (!from || lo >= from) && (!to || hi <= to);
+      // Con solo el año, cuenta si ese año se solapa con el intervalo pedido.
+      const start = p.precision === 'año' ? `${p.fecha}-01-01` : p.fecha;
+      const end = p.precision === 'año' ? `${p.fecha}-12-31` : p.fecha;
+      return (!from || end >= from) && (!to || start <= to);
     });
     description.plantado = { desde: from, hasta: to };
   }

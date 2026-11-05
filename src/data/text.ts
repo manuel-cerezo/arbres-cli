@@ -1,11 +1,16 @@
-/** Minúsculas, sin acentos, sin apóstrofos ni signos: «l'Antiga Esquerra» → «lantiga esquerra». */
+/**
+ * Minúsculas, sin acentos ni signos: «l'Antiga Esquerra» → «l antiga esquerra»,
+ * «Til·ler» → «tiller», «Platanus × acerifolia» → «platanus x acerifolia».
+ * El apóstrofo separa palabras para que «Eixample» encuentre «l'Eixample».
+ */
 export function norm(value: string | null | undefined): string {
   return (value ?? '')
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/[’'`´·.]/g, '')
-    .replace(/[^a-z0-9×]+/g, ' ')
+    .replace(/×/g, 'x')
+    .replace(/[·.]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
 

@@ -16,7 +16,10 @@ async function run(...args: string[]) {
 }
 
 test('normaliza nombres con acentos y apóstrofos', () => {
-  assert.equal(norm("la Nova Esquerra de l'Eixample"), 'la nova esquerra de leixample');
+  assert.equal(norm("la Nova Esquerra de l'Eixample"), 'la nova esquerra de l eixample');
+  assert.equal(norm('Platanus × acerifolia'), 'platanus x acerifolia');
+  assert.equal(norm('Til·ler'), 'tiller');
+  assert.equal(matchScore('eixample', "la Dreta de l'Eixample"), 1);
   assert.equal(matchScore('gracia', 'GRÀCIA'), 3);
   assert.equal(matchScore('pino', 'Espino de Jerusalén'), 0);
   assert.equal(matchScore('pino', 'Pino piñonero'), 1);
@@ -154,6 +157,14 @@ test('descarga por HTTP, guarda en caché y funciona sin red', async () => {
     const second = await run('record', 'mas-reciente', '--json');
     assert.equal(second.json.resultado.fecha, first.json.resultado.fecha);
     assert.equal(hits, afterFirst, 'la segunda consulta sale de la caché');
+    // Una copia dañada se descarta y se vuelve a bajar.
+    const { readdirSync, writeFileSync } = await import('node:fs');
+    const cacheDir = process.env.ARBRES_CACHE_DIR!;
+    const versionDir = readdirSync(cacheDir).find((e) => /^\d{8}T/.test(e))!;
+    writeFileSync(join(cacheDir, versionDir, 'trees-viari.json.gz'), 'basura');
+    const third = await run('record', 'mas-reciente', '--json');
+    assert.equal(third.code, 0);
+    assert.equal(hits, afterFirst + 1);
     server.close();
     const offline = await run('arbol', 'A1', '--sin-red', '--json');
     assert.equal(offline.code, 0);
@@ -162,6 +173,82 @@ test('descarga por HTTP, guarda en caché y funciona sin red', async () => {
     process.env.ARBRES_DATA_DIR = saved.dir;
     delete process.env.ARBRES_DATA_URL;
     if (saved.cache) process.env.ARBRES_CACHE_DIR = saved.cache;
+    else delete process.env.ARBRES_CACHE_DIR;
+  }
+});
+
+test('una opción con valor delante del comando no lo confunde', async () => {
+  const { code, json } = await run('--idioma', 'ca', 'record', 'mas-reciente', '--json');
+  assert.equal(code, 0);
+  assert.equal(json.consulta, 'record mas-reciente');
+  assert.equal(json.resultado.arboles.find((a: { codigo: string }) => a.codigo === 'A3').especie.comun, 'Xicranda');
+});
+
+test('las especies sin identificar no son especies únicas y las grafías con × y x se juntan', async () => {
+  const { json } = await run('record', 'especies-unicas', '--json');
+  const names = json.resultado.arboles.map((a: { especie: { cientifico: string } }) => a.especie.cientifico).sort();
+  assert.deepEqual(names, ['Jacaranda mimosifolia', 'Parkinsonia aculeata', 'Pinus pinea', 'Tilia cordata']);
+  assert.ok(json.notas.some((n: string) => n.includes('sin especie identificada')));
+});
+
+test('coordenadas al revés dan una pista', async () => {
+  const { code, err } = await run('cerca', '2.1744,41.4036');
+  assert.equal(code, 2);
+  assert.match(err, /al revés/);
+});
+
+test('un barrio que es un distrito sugiere --distrito', async () => {
+  const { code, err } = await run('buscar', '--barrio', 'eixample');
+  assert.equal(code, 2);
+  assert.match(err, /--distrito "Eixample"/);
+});
+
+test('ranking de barrios dentro de un distrito y sin filtros que no aplican', async () => {
+  const { json } = await run('record', 'barrio-mas-arbolado', '--distrito', 'Eixample', '--json');
+  assert.deepEqual(json.resultado.map((r: { nombre: string }) => r.nombre), ['la Sagrada Família', "la Nova Esquerra de l'Eixample"]);
+  const bad = await run('record', 'barrio-mas-arbolado', '--especie', 'platano');
+  assert.equal(bad.code, 2);
+  assert.match(bad.err, /no admite --especie/);
+});
+
+test('la guía funciona sin datos', async () => {
+  const saved = process.env.ARBRES_DATA_DIR;
+  process.env.ARBRES_DATA_DIR = '/no/existe';
+  try {
+    const { code, json } = await run('guia', '--json');
+    assert.equal(code, 0);
+    assert.match(json.resultado.guia, /PARA AGENTES/);
+  } finally {
+    process.env.ARBRES_DATA_DIR = saved;
+  }
+});
+
+test('un idioma desconocido es un error de uso', async () => {
+  const { code, json } = await run('stats', '--idioma', 'en', '--json');
+  assert.equal(code, 2);
+  assert.equal(json.tipo, 'uso');
+});
+
+test('borrar la caché solo toca sus propios ficheros', async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, existsSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'arbres-clear-'));
+  writeFileSync(join(dir, 'meta.json'), '{}');
+  mkdirSync(join(dir, '20261103T132047042Z'));
+  writeFileSync(join(dir, 'notas.txt'), 'no tocar');
+  mkdirSync(join(dir, 'fotos'));
+  const saved = process.env.ARBRES_CACHE_DIR;
+  process.env.ARBRES_CACHE_DIR = dir;
+  try {
+    const { code } = await run('cache', '--limpiar');
+    assert.equal(code, 0);
+    assert.equal(existsSync(join(dir, 'meta.json')), false);
+    assert.equal(existsSync(join(dir, '20261103T132047042Z')), false);
+    assert.equal(existsSync(join(dir, 'notas.txt')), true);
+    assert.equal(existsSync(join(dir, 'fotos')), true);
+  } finally {
+    if (saved) process.env.ARBRES_CACHE_DIR = saved;
     else delete process.env.ARBRES_CACHE_DIR;
   }
 });

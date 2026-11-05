@@ -33,6 +33,7 @@ Cuando se publique en npm bastará con `npx arbres-cli …` o `npm install -g ar
 | ¿Qué especie es la más común en L'Hospitalet? | `arbres record especie-mas-comun --municipio lh` |
 | ¿Qué especies tienen un solo ejemplar? | `arbres record especies-unicas` |
 | ¿Qué barrio tiene más árboles por habitante? | `arbres record barrio-mas-arbolado --por habitante` |
+| ¿Y dentro de Gràcia, por km²? | `arbres record barrio-mas-arbolado --distrito Gràcia --por km2` |
 | ¿Qué florece en abril en el Eixample? | `arbres record florece --mes 4 --distrito Eixample` |
 | ¿Cuántos árboles tienen polen muy alergénico? | `arbres record alergenos` |
 | ¿Qué árboles hay cerca de mí? | `arbres cerca 41.4036,2.1744 --radio 150` |
@@ -60,7 +61,7 @@ Todo comando acepta `--json`. La salida siempre tiene la misma forma:
 }
 ```
 
-Si hay un error, la salida es `{ "error": "…", "tipo": "uso" | "datos" | "formato" }` y el código de salida es distinto de 0.
+Si hay un error, la salida es `{ "error": "…", "tipo": "uso" | "datos" | "formato" | "interno" }` y el código de salida es distinto de 0 (2 si es un error de uso, como un barrio ambiguo; 1 en los demás casos).
 
 **Agentes que ejecutan comandos** (Claude Code, Codex, Cursor, Gemini CLI…): añade esto a sus instrucciones (`CLAUDE.md`, `AGENTS.md`…):
 
@@ -78,6 +79,7 @@ los comandos con --json. Lee las notas y cita la fuente y la fecha de los datos.
 - **La fecha de plantación falta en la mayoría de árboles de Barcelona** (la tiene menos de uno de cada cuatro). Los récords de fecha solo cuentan los que la tienen y descartan fechas imposibles (anteriores a 1900 o futuras) y las que L'Hospitalet marca como sospechosas.
 - Es la fecha de plantación en el inventario, no la edad del árbol.
 - La floración y la alergenicidad del polen salen de las fichas de especie de arbres.barcelona: son orientativas.
+- Los árboles sin especie identificada («Tilia sp.», «Indeterminat Arbre») no cuentan en los récords de especies.
 
 ## Datos y licencias
 

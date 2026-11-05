@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { DataSource, DataUnavailableError } from './data/source.js';
 import { FormatError } from './data/format.js';
@@ -38,17 +37,38 @@ function help(): string {
   ].join('\n');
 }
 
+const CACHE_OPTIONS = { limpiar: { type: 'boolean' } } as const;
+
+/** Todas las opciones de todos los comandos: sirve para saber qué palabra es el comando
+ *  aunque haya opciones con valor delante («arbres --idioma ca record …»). */
+const ALL_OPTIONS = Object.assign({}, GLOBAL_OPTIONS, CACHE_OPTIONS, ...COMMANDS.map((c) => c.options ?? {}));
+
+function commandName(argv: string[]): string | undefined {
+  try {
+    return parseArgs({ args: argv, options: ALL_OPTIONS, allowPositionals: true, strict: false }).positionals[0];
+  } catch {
+    return argv.find((a) => !a.startsWith('-'));
+  }
+}
+
+function errorJson(message: string, tipo: 'uso' | 'datos' | 'formato' | 'interno'): string {
+  return `${JSON.stringify({ error: message, tipo }, null, 2)}\n`;
+}
+
 export async function main(argv: string[], out: (s: string) => void = (s) => process.stdout.write(s), err: (s: string) => void = (s) => process.stderr.write(s)): Promise<number> {
-  const name = argv.find((a) => !a.startsWith('-'));
+  const name = commandName(argv);
   const json = argv.includes('--json');
   try {
-    if (!name || argv.includes('--version') || argv.includes('-v')) {
-      if (argv.includes('--version') || argv.includes('-v')) out(`${VERSION}\n`);
-      else out(`${help()}\n`);
+    if (argv.includes('--version') || argv.includes('-v')) {
+      out(`${VERSION}\n`);
+      return 0;
+    }
+    if (!name) {
+      out(`${help()}\n`);
       return 0;
     }
     if (name === 'cache') {
-      const { values } = parseArgs({ args: argv.slice(1), options: { limpiar: { type: 'boolean' }, json: { type: 'boolean' } }, allowPositionals: true });
+      const { values } = parseArgs({ args: argv, options: { ...CACHE_OPTIONS, json: { type: 'boolean' } }, allowPositionals: true });
       const source = new DataSource();
       if (values.limpiar) await source.clear();
       out(json ? `${JSON.stringify({ cache: source.cacheDir, borrada: !!values.limpiar })}\n` : `${values.limpiar ? 'Caché borrada: ' : ''}${source.cacheDir}\n`);
@@ -56,20 +76,26 @@ export async function main(argv: string[], out: (s: string) => void = (s) => pro
     }
     const command = COMMANDS.find((c) => c.name === name || (name === 'árbol' && c.name === 'arbol') || (name === 'guía' && c.name === 'guia'));
     if (!command) throw new UsageError(`Comando desconocido «${name}».\n\n${help()}`);
-    const index = argv.indexOf(name);
-    const { values, positionals } = parseArgs({
-      args: [...argv.slice(0, index), ...argv.slice(index + 1)],
+    const parsed = parseArgs({
+      args: argv,
       options: { ...GLOBAL_OPTIONS, ...(command.options ?? {}) },
       allowPositionals: true,
       strict: true,
     });
+    const values = parsed.values;
+    // El primer argumento suelto es el nombre del comando.
+    const positionals = parsed.positionals.slice(1);
     if (values.ayuda || values.help) {
       out(`${command.summary}\n\nUso: ${command.usage}\n\n${command.name === 'guia' ? '' : 'Ejecuta "arbres guia" para ver todos los filtros.\n'}`);
       return 0;
     }
-    if (command.name === 'guia' && !json) {
-      out(GUIDE);
+    if (command.name === 'guia') {
+      // La guía no necesita datos: funciona sin red y sin caché.
+      out(json ? `${JSON.stringify({ consulta: 'guia', resultado: { guia: GUIDE } }, null, 2)}\n` : GUIDE);
       return 0;
+    }
+    if (values.idioma !== undefined && values.idioma !== 'es' && values.idioma !== 'ca') {
+      throw new UsageError(`Idioma desconocido «${String(values.idioma)}». Usa es o ca.`);
     }
     const lang = (values.idioma === 'ca' ? 'ca' : 'es') as Lang;
     const store = new Store(new DataSource({ offline: !!values['sin-red'], refresh: !!values.actualizar }));
@@ -83,30 +109,16 @@ export async function main(argv: string[], out: (s: string) => void = (s) => pro
     }
     return 0;
   } catch (error) {
-    const known = error instanceof UsageError || error instanceof DataUnavailableError || error instanceof FormatError;
-    const message = known ? error.message : `Error inesperado: ${(error as Error)?.stack ?? String(error)}`;
-    const code = error instanceof UsageError ? 2 : 1;
     if ((error as { code?: string })?.code?.startsWith?.('ERR_PARSE_ARGS')) {
       const msg = `${(error as Error).message}\nEjecuta "arbres guia" para ver las opciones.`;
-      if (json) out(`${JSON.stringify({ error: msg }, null, 2)}\n`);
+      if (json) out(errorJson(msg, 'uso'));
       else err(`${msg}\n`);
       return 2;
     }
-    if (json) out(`${JSON.stringify({ error: message, tipo: error instanceof UsageError ? 'uso' : error instanceof FormatError ? 'formato' : 'datos' }, null, 2)}\n`);
+    const tipo = error instanceof UsageError ? 'uso' : error instanceof FormatError ? 'formato' : error instanceof DataUnavailableError ? 'datos' : 'interno';
+    const message = tipo === 'interno' ? `Error inesperado: ${(error as Error)?.stack ?? String(error)}` : (error as Error).message;
+    if (json) out(errorJson(message, tipo));
     else err(`${message}\n`);
-    return code;
+    return tipo === 'uso' ? 2 : 1;
   }
-}
-
-// Si la salida se corta (arbres … | head), se termina sin traza.
-process.stdout.on('error', (error: NodeJS.ErrnoException) => {
-  if (error.code === 'EPIPE') process.exit(0);
-  throw error;
-});
-
-const invokedDirectly = process.argv[1] && /(?:cli\.[jt]s|arbres(?:-cli)?)$/.test(process.argv[1].replace(/\\/g, '/'));
-if (invokedDirectly) {
-  main(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  });
 }

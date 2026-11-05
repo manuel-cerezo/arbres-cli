@@ -1,5 +1,5 @@
 import type { MunicipalityId } from '../data/format.js';
-import { CATEGORIES, MUNICIPALITY_NAME, areaUrl, type AreaEntry, type Tree } from '../data/store.js';
+import { CATEGORIES, LOCATION_OF, MUNICIPALITY_NAME, areaUrl, type AreaEntry, type SpeciesCard, type Tree } from '../data/store.js';
 import { FILTER_OPTIONS, UsageError, buildFilter, distance, parseMunicipality, parsePoint, resolveSpecies } from '../filters.js';
 import { firstName, fmt, speciesName, treeJson, treeLine, type Answer } from '../output.js';
 import { scoreArea } from './areaMatch.js';
@@ -39,7 +39,7 @@ export const stats: Command = {
       const a = areas[m]!;
       const datasets = Object.entries(meta.datasets)
         .filter(([id, d]) => (d.municipi ?? (id === 'lh' ? 'lh' : 'bcn')) === m)
-        .map(([id, d]) => ({ fuente: id, arboles: d.count }));
+        .map(([id, d]) => ({ fuente: id, tipo_espacio: LOCATION_OF[id as keyof typeof LOCATION_OF] ?? null, arboles: d.count }));
       return {
         municipio: m,
         nombre: MUNICIPALITY_NAME[m],
@@ -55,9 +55,11 @@ export const stats: Command = {
       .map((r) =>
         [
           `${r.nombre}: ${fmt(r.arboles)} árboles (${fmt(r.arboles_por_km2)} por km², ${fmt(r.arboles_por_habitante, 3)} por habitante)`,
-          `  Por fuente: ${r.por_fuente.map((d) => `${d.fuente} ${fmt(d.arboles)}`).join(' · ')}`,
+          r.por_fuente.length > 1 ? `  Por tipo de espacio: ${r.por_fuente.map((d) => `${d.tipo_espacio ?? d.fuente} ${fmt(d.arboles)}`).join(' · ')}` : null,
           ...r.distritos.map((d) => `  ${d.nombre}: ${fmt(d.arboles)} árboles, ${d.especies} especies`),
-        ].join('\n'),
+        ]
+          .filter(Boolean)
+          .join('\n'),
       )
       .join('\n\n');
     return { consulta: 'stats', resultado: result, texto: text, municipios };
@@ -78,7 +80,7 @@ export const arbol: Command = {
     if (!tree) throw new UsageError(`No hay ningún árbol con el código «${code}» en los datos actuales. Puede que se haya retirado.`);
     const card = await ctx.store.cardFor(tree.especie.cientifico);
     const sameSpecies = trees.filter((t) => t.especie.grupo && t.especie.grupo === tree.especie.grupo);
-    const inHood = sameSpecies.filter((t) => t.barrioCodigo === tree.barrioCodigo).length;
+    const inHood = tree.barrioCodigo == null ? null : sameSpecies.filter((t) => t.barrioCodigo === tree.barrioCodigo).length;
     const result = treeJson(tree, ctx.lang, {
       ejemplares_de_la_especie: { total: sameSpecies.length, en_el_barrio: inHood },
       especie_ficha: card ? speciesTraits(card, ctx.lang) : null,
@@ -86,7 +88,7 @@ export const arbol: Command = {
     const lines = [
       treeLine(tree, ctx.lang),
       tree.categoria ? `Categoría: ${tree.categoria} (${CATEGORIES[tree.categoria]?.texto ?? '—'})` : null,
-      `Hay ${fmt(sameSpecies.length)} ejemplares de la especie en los datos, ${fmt(inHood)} en el barrio.`,
+      `Hay ${fmt(sameSpecies.length)} ejemplares de la especie en los datos${inHood != null ? `, ${fmt(inHood)} en el barrio` : ''}.`,
       card?.traits?.flowering?.length ? `Florece: ${monthsText(card.traits.flowering)}` : null,
     ].filter(Boolean);
     return { consulta: `arbol ${code}`, resultado: result, texto: lines.join('\n'), municipios: [tree.municipio] };
@@ -101,7 +103,7 @@ export function monthsText(months: number[]): string {
 const LEAF: Record<string, string> = { deciduous: 'caduca', evergreen: 'perenne', 'semi-evergreen': 'semiperenne' };
 const POLLEN = ['nula', 'baja', 'moderada', 'alta', 'muy alta'];
 
-export function speciesTraits(card: import('../data/store.js').SpeciesCard, lang: 'es' | 'ca') {
+export function speciesTraits(card: SpeciesCard, lang: 'es' | 'ca') {
   const t = card.traits ?? {};
   const text = card.texts?.[lang] ?? card.texts?.es;
   return {
@@ -134,7 +136,13 @@ export const especie: Command = {
       const own = hits.filter((t) => t.especie.cientifico === ci);
       return { cientifico: ci, comun: own[0] ? speciesName(own[0], ctx.lang) : ci, ejemplares: own.length };
     }).sort((a, b) => b.ejemplares - a.ejemplares);
-    const cards = await Promise.all(names.slice(0, 5).map((n) => ctx.store.cardFor(n)));
+    // Fichas de las especies con más ejemplares, sin repetir (las variedades comparten ficha).
+    const cards: SpeciesCard[] = [];
+    for (const s of species) {
+      const card = await ctx.store.cardFor(s.cientifico);
+      if (card && !cards.includes(card)) cards.push(card);
+      if (cards.length === 5) break;
+    }
     const dated = hits.filter((t) => t.plantacion && !t.plantacion.dudosa && t.plantacion.precision === 'dia');
     dated.sort((a, b) => a.plantacion!.fecha.localeCompare(b.plantacion!.fecha));
     const result = {
@@ -146,7 +154,7 @@ export const especie: Command = {
       plantacion: dated.length
         ? { con_fecha: dated.length, primera: dated[0].plantacion!.fecha, ultima: dated.at(-1)!.plantacion!.fecha }
         : null,
-      rasgos: cards.filter(Boolean).map((c) => ({ cientifico: c!.ci, ...speciesTraits(c!, ctx.lang), descripcion: undefined })),
+      rasgos: cards.map((c) => ({ cientifico: c.ci, ...speciesTraits(c, ctx.lang), descripcion: undefined })),
     };
     const lines = [
       `${fmt(hits.length)} ejemplares${names.length > 1 ? ` de ${names.length} especies` : ''}.`,
@@ -180,7 +188,7 @@ function areaCommand(kind: 'barrio' | 'distrito'): Command {
       const parent = kind === 'barrio' ? a.districts.find((d) => d.code === entry.district) : null;
       const list = kind === 'barrio' ? a.neighborhoods : a.districts;
       const rank = (key: keyof AreaEntry) =>
-        [...list].filter((x) => typeof x[key] === 'number').sort((x, y) => (y[key] as number) - (x[key] as number)).findIndex((x) => x.code === entry.code) + 1;
+        [...list].filter((x) => typeof x[key] === 'number').sort((x, y) => (y[key] as number) - (x[key] as number)).findIndex((x) => x.code === entry.code) + 1 || null;
       const result = {
         nombre: entry.name,
         municipio,
@@ -200,7 +208,7 @@ function areaCommand(kind: 'barrio' | 'distrito'): Command {
       const lines = [
         `${entry.name}${parent ? ` (${parent.name})` : ''}: ${fmt(entry.trees)} árboles, ${fmt(entry.species_count)} especies.`,
         `${fmt(entry.per_km2)} por km² y ${fmt(entry.per_inhabitant, 3)} por habitante (media: ${fmt(a.city.per_km2)} y ${fmt(a.city.per_inhabitant, 3)}).`,
-        `Puesto ${result.posicion.por_arboles} de ${list.length} por número de árboles, ${result.posicion.por_habitante} por habitante.`,
+        `Puesto ${result.posicion.por_arboles} de ${list.length} por número de árboles${result.posicion.por_habitante ? `, ${result.posicion.por_habitante} por habitante` : ''}.`,
         `Más comunes: ${result.especies_mas_comunes.map((s) => `${s.comun ?? s.cientifico} (${fmt(s.ejemplares)})`).join(', ')}`,
         result.url,
       ];

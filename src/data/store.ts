@@ -31,6 +31,8 @@ export interface Species {
   cientifico: string | null;
   /** Especie de su ficha: agrupa variedades y sinónimos («Platanus hispanica» → «Platanus × acerifolia»). */
   grupo: string | null;
+  /** false para «Tilia sp.», «Indeterminat Arbre»…: no se sabe la especie. */
+  identificada: boolean;
   castellano: string | null;
   catalan: string | null;
 }
@@ -107,6 +109,16 @@ export interface SpeciesCard {
 
 const HISTORIC_LIMIT = '1900-01-01';
 
+/** «Acer sp.», «Washingtonia sp», «Prunus spp.», «Indeterminat Arbre»: solo género o nada. */
+export function isUnidentified(cientifico: string | null): boolean {
+  return !cientifico || /\bspp?\.?$|indetermin|desconegu/i.test(cientifico.trim());
+}
+
+/** Clave para juntar grafías de la misma especie: «Abies x masjoannis» = «Abies × masjoannis». */
+export function speciesKey(name: string): string {
+  return norm(name);
+}
+
 function planting(raw: string | null, precision: string | null, today: string): Planting | null {
   if (!raw || !/^\d{4}-\d{2}-\d{2}/.test(raw)) return null;
   const fecha = raw.slice(0, 10);
@@ -136,6 +148,7 @@ export class Store {
   private treesPromise: Promise<Tree[]> | null = null;
   private areasPromise: Promise<Record<MunicipalityId, AreaFile | null>> | null = null;
   private cardsPromise: Promise<SpeciesCard[]> | null = null;
+  private cardIndexPromise: Promise<Map<string, SpeciesCard>> | null = null;
 
   /** Todos los barrios y distritos conocidos, aunque no tengan árboles en el inventario. */
   async areaRefs(): Promise<AreaRef[]> {
@@ -171,12 +184,26 @@ export class Store {
     return this.cardsPromise;
   }
 
+  private cardIndex(): Promise<Map<string, SpeciesCard>> {
+    this.cardIndexPromise ??= this.speciesCards()
+      .catch(() => [] as SpeciesCard[])
+      .then((cards) => {
+        const index = new Map<string, SpeciesCard>();
+        for (const card of cards) {
+          for (const name of [card.ci, ...(card.names ?? [])]) {
+            const key = speciesKey(name);
+            if (!index.has(key)) index.set(key, card);
+          }
+        }
+        return index;
+      });
+    return this.cardIndexPromise;
+  }
+
   /** Ficha de especie por nombre científico (incluye variedades y sinónimos). */
   async cardFor(cientifico: string | null): Promise<SpeciesCard | null> {
     if (!cientifico) return null;
-    const cards = await this.speciesCards();
-    const n = norm(cientifico);
-    return cards.find((c) => norm(c.ci) === n || c.names?.some((x) => norm(x) === n)) ?? null;
+    return (await this.cardIndex()).get(speciesKey(cientifico)) ?? null;
   }
 
   trees(): Promise<Tree[]> {
@@ -188,9 +215,15 @@ export class Store {
     const meta = await this.meta();
     const areas = await this.areas();
     const today = new Date().toISOString().slice(0, 10);
-    const cards = await this.speciesCards().catch(() => [] as SpeciesCard[]);
+    const cards = await this.cardIndex();
+    // Grupo de cada especie: la de su ficha o, sin ficha, la primera grafía vista.
     const groupOf = new Map<string, string>();
-    for (const card of cards) for (const name of [card.ci, ...(card.names ?? [])]) groupOf.set(norm(name), card.ci);
+    const groupFor = (ci: string): string => {
+      const key = speciesKey(ci);
+      let group = groupOf.get(key);
+      if (!group) groupOf.set(key, (group = cards.get(key)?.ci ?? ci));
+      return group;
+    };
     const ids = DATASET_IDS.filter((id) => meta.datasets[id]);
     const files = await Promise.all(
       ids.map((id) => this.source.json<PackedDataset>(`trees-${id}.json.gz`, { checkFormat: true })),
@@ -206,11 +239,12 @@ export class Store {
 
       const species: Species[] = file.species.map((s) => ({
         cientifico: s.ci,
-        grupo: s.ci ? (groupOf.get(norm(s.ci)) ?? s.ci) : null,
+        grupo: s.ci ? groupFor(s.ci) : null,
+        identificada: !isUnidentified(s.ci),
         castellano: s.es && s.es !== '-' ? s.es : null,
         catalan: s.ca && s.ca !== '-' ? s.ca : null,
       }));
-      const empty: Species = { cientifico: null, grupo: null, castellano: null, catalan: null };
+      const empty: Species = { cientifico: null, grupo: null, identificada: false, castellano: null, catalan: null };
       const hoods = file.barris.map((b) => {
         const entry = (b.c != null ? hoodByCode.get(b.c + offset) : undefined) ?? hoodByName.get(norm(b.n));
         return { name: entry?.name ?? (b.n ? titleCase(b.n) : null), code: entry?.code ?? (b.c != null ? b.c + offset : null) };

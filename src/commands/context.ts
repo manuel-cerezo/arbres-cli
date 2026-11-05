@@ -1,4 +1,5 @@
 import type { Store } from '../data/store.js';
+import { UsageError } from '../filters.js';
 import type { Answer, Lang } from '../output.js';
 
 export interface Context {
@@ -25,5 +26,6 @@ export function limit(ctx: Context, fallback: number, max = 500): number {
   const raw = str(ctx, 'limite');
   if (raw == null) return fallback;
   const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback;
+  if (!Number.isInteger(n) || n < 1) throw new UsageError(`--limite tiene que ser un número entero mayor que 0 (has puesto «${raw}»).`);
+  return Math.min(n, max);
 }

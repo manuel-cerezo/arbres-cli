@@ -1,6 +1,6 @@
 import type { MunicipalityId } from '../data/format.js';
 import { CATEGORIES, areaUrl, type AreaEntry, type Tree } from '../data/store.js';
-import { FILTER_OPTIONS, UsageError, buildFilter, parseMunicipality } from '../filters.js';
+import { FILTER_OPTIONS, UsageError, buildFilter, parseMunicipality, resolveArea } from '../filters.js';
 import { fmt, groupName, treeJson, treeLine, type Answer } from '../output.js';
 import { countBy, filterInput, monthsText, municipiosOf } from './basic.js';
 import { limit, str, type Command, type Context } from './context.js';
@@ -58,11 +58,13 @@ function plantingRecord(id: string, newest: boolean): RecordDef {
   };
 }
 
+/** Árboles por especie (agrupando variedades). Los de especie sin identificar
+ *  («Tilia sp.», «Indeterminat Arbre») no cuentan como especie. */
 function speciesCount(trees: Tree[]) {
   const map = new Map<string, Tree[]>();
   for (const t of trees) {
     const k = t.especie.grupo;
-    if (!k) continue;
+    if (!k || !t.especie.identificada) continue;
     let list = map.get(k);
     if (!list) map.set(k, (list = []));
     list.push(t);
@@ -70,25 +72,37 @@ function speciesCount(trees: Tree[]) {
   return map;
 }
 
+
+const UNIDENTIFIED_NOTE = (trees: Tree[]) => {
+  const n = trees.filter((t) => !t.especie.identificada).length;
+  return n ? [`No cuentan ${fmt(n)} árboles sin especie identificada (p. ej. «Tilia sp.», solo con el género).`] : [];
+};
+
 function areaRanking(kind: 'barrio' | 'distrito', id: string, most: boolean): RecordDef {
   const label = kind === 'barrio' ? 'barrios' : 'distritos';
   return {
     id,
-    summary: `${most ? 'Los' : 'Los'} ${label} con ${most ? 'más' : 'menos'} árboles (--por total|habitante|km2|especies)`,
+    summary: `Los ${label} con ${most ? 'más' : 'menos'} árboles (--por total|habitante|km2|especies)`,
     extra: '--por total|habitante|km2|especies',
     async run(ctx) {
       const by = str(ctx, 'por') ?? 'total';
       const keys: Record<string, keyof AreaEntry> = { total: 'trees', habitante: 'per_inhabitant', km2: 'per_km2', especies: 'species_count' };
       const key = keys[by];
       if (!key) throw new UsageError('--por admite total, habitante, km2 o especies.');
+      // Estos récords salen de los resúmenes por zona, no del inventario: solo admiten municipio y, para barrios, distrito.
+      const allowed = kind === 'barrio' ? ['municipio', 'distrito'] : ['municipio'];
+      const ignored = Object.keys(FILTER_OPTIONS).filter((k) => !allowed.includes(k) && str(ctx, k) != null);
+      if (ignored.length) throw new UsageError(`${id} no admite ${ignored.map((k) => `--${k}`).join(', ')}: solo ${allowed.map((k) => `--${k}`).join(' y ')}.`);
       const areas = await ctx.store.areas();
       const only = parseMunicipality(str(ctx, 'municipio'));
+      const inDistrict = kind === 'barrio' && str(ctx, 'distrito') ? resolveArea([], str(ctx, 'distrito')!, 'distrito', only, await ctx.store.areaRefs()) : null;
       const rows: { entry: AreaEntry; municipio: MunicipalityId; district: string | null }[] = [];
       for (const m of ['bcn', 'lh'] as MunicipalityId[]) {
         const file = areas[m];
         if (!file || (only && m !== only)) continue;
         for (const e of kind === 'barrio' ? file.neighborhoods : file.districts) {
           if (typeof e[key] !== 'number') continue;
+          if (inDistrict && (m !== inDistrict.municipio || e.district !== inDistrict.code)) continue;
           rows.push({ entry: e, municipio: m, district: kind === 'barrio' ? (file.districts.find((d) => d.code === e.district)?.name ?? null) : null });
         }
       }
@@ -111,10 +125,18 @@ function areaRanking(kind: 'barrio' | 'distrito', id: string, most: boolean): Re
         km2: (r) => `${fmt(r.arboles_por_km2)} árboles por km²`,
         especies: (r) => `${fmt(r.especies_distintas)} especies`,
       };
-      const notas = only ? [] : ['Mezcla Barcelona y L\'Hospitalet; usa --municipio bcn o lh para separarlos.'];
+      const notas = only || inDistrict ? [] : ['Mezcla Barcelona y L\'Hospitalet; usa --municipio bcn o lh para separarlos.'];
       if (by === 'habitante') notas.push('Padrón municipal del año que cita cada fuente; los barrios con poca población (Montjuïc, parques) salen muy arriba.');
       const text = result.map((r) => `${r.puesto}. ${r.nombre}${r.distrito ? ` (${r.distrito})` : ''}: ${unit[by](r)}`).join('\n');
-      return { consulta: `record ${id}`, filtros: { por: by, ...(only ? { municipio: only } : {}) }, resultado: result, notas, texto: text, municipios: only ? [only] : ['bcn', 'lh'] };
+      const municipios: MunicipalityId[] = inDistrict ? [inDistrict.municipio] : only ? [only] : ['bcn', 'lh'];
+      return {
+        consulta: `record ${id}`,
+        filtros: { por: by, ...(only ? { municipio: only } : {}), ...(inDistrict ? { distrito: inDistrict.name } : {}) },
+        resultado: result,
+        notas,
+        texto: text,
+        municipios,
+      };
     },
   };
 }
@@ -137,7 +159,7 @@ const RECORDS: RecordDef[] = [
         porcentaje: Math.round((1000 * list.length) / Math.max(1, trees.length)) / 10,
       }));
       const text = result.map((r) => `${r.puesto}. ${r.comun}: ${fmt(r.ejemplares)} (${fmt(r.porcentaje, 1)} %)`).join('\n');
-      return { consulta: 'record especie-mas-comun', filtros: filter.description, resultado: result, texto: text, municipios: municipiosOf(trees) };
+      return { consulta: 'record especie-mas-comun', filtros: filter.description, resultado: result, notas: UNIDENTIFIED_NOTE(trees), texto: text, municipios: municipiosOf(trees) };
     },
   },
   {
@@ -150,7 +172,7 @@ const RECORDS: RecordDef[] = [
       const n = limit(ctx, 100);
       const result = { total: singles.length, arboles: singles.slice(0, n).map((t) => treeJson(t, ctx.lang)) };
       const text = [`${singles.length} especies con un único ejemplar.`, ...singles.slice(0, n).map((t) => `  ${treeLine(t, ctx.lang)}`)].join('\n');
-      return { consulta: 'record especies-unicas', filtros: filter.description, resultado: result, texto: text, municipios: municipiosOf(singles) };
+      return { consulta: 'record especies-unicas', filtros: filter.description, resultado: result, notas: UNIDENTIFIED_NOTE(trees), texto: text, municipios: municipiosOf(singles) };
     },
   },
   {
@@ -168,7 +190,7 @@ const RECORDS: RecordDef[] = [
         especies: rare.slice(0, n).map(([ci, l]) => ({ cientifico: ci, comun: groupName(l, ctx.lang), ejemplares: l.length, codigos: l.map((t) => t.ref) })),
       };
       const text = [`${rare.length} especies con menos de ${max} ejemplares.`, ...result.especies.map((s) => `  ${s.comun}: ${s.ejemplares}`)].join('\n');
-      return { consulta: 'record especies-raras', filtros: { ...filter.description, menos_de: max }, resultado: result, texto: text, municipios: municipiosOf(trees) };
+      return { consulta: 'record especies-raras', filtros: { ...filter.description, menos_de: max }, resultado: result, notas: UNIDENTIFIED_NOTE(trees), texto: text, municipios: municipiosOf(trees) };
     },
   },
   {

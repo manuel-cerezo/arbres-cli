@@ -37,6 +37,9 @@ FILTROS (sirven en record, buscar, cerca y especie)
   --cerca <lat,lng> --radio <m>
   --limite N                   cuántos resultados mostrar
 
+  Los récords de barrios y distritos (barrio-mas-arbolado…) salen de los
+  resúmenes por zona: admiten --municipio y, los de barrios, --distrito.
+
 OTRAS OPCIONES
   --json            salida para programas y agentes
   --idioma es|ca    nombres comunes en castellano o catalán
@@ -48,6 +51,8 @@ EJEMPLOS
       arbres record mas-reciente --distrito Gràcia --json
   "¿Qué especie es la más común en L'Hospitalet?"
       arbres record especie-mas-comun --municipio lh --json
+  "¿Qué barrio de Gràcia tiene más árboles por km²?"
+      arbres record barrio-mas-arbolado --distrito Gràcia --por km2 --json
   "¿Qué florece en abril en el Eixample?"
       arbres record florece --mes 4 --distrito Eixample --json
   "¿Qué árboles hay cerca de la Sagrada Família?"
